@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Download sequence - microservice call chain</title>
+<style>body{margin:0;padding:16px;font-family:'Segoe UI',Arial,sans-serif;background:#fff;}svg{width:100%;height:auto;display:block;margin:0 auto;}</style>
+</head>
+<body>
+<svg viewBox="0 0 1080 620" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#1d4ed8"/></marker>
+    <marker id="arrG" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/></marker>
+    <marker id="arrV" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#7c3aed"/></marker>
+  </defs>
+
+  <!-- lifelines -->
+  <g font-size="12.5" font-weight="700">
+    <rect x="30" y="20" width="120" height="36" rx="8" fill="#fff7e6" stroke="#d97706"/><text x="90" y="43" text-anchor="middle" fill="#92400e">Client</text>
+    <rect x="200" y="20" width="120" height="36" rx="8" fill="#eff6ff" stroke="#2563eb"/><text x="260" y="43" text-anchor="middle" fill="#1d4ed8">Gateway</text>
+    <rect x="370" y="20" width="120" height="36" rx="8" fill="#f0fdf4" stroke="#16a34a"/><text x="430" y="43" text-anchor="middle" fill="#15803d">Auth</text>
+    <rect x="540" y="20" width="130" height="36" rx="8" fill="#f0fdf4" stroke="#16a34a"/><text x="605" y="43" text-anchor="middle" fill="#15803d">FileMeta</text>
+    <rect x="720" y="20" width="130" height="36" rx="8" fill="#f0fdf4" stroke="#16a34a"/><text x="785" y="43" text-anchor="middle" fill="#15803d">BlockStore</text>
+    <rect x="900" y="20" width="130" height="36" rx="8" fill="#f5f3ff" stroke="#7c3aed"/><text x="965" y="43" text-anchor="middle" fill="#6d28d9">EventBus</text>
+  </g>
+  <g stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4">
+    <line x1="90" y1="56" x2="90" y2="590"/>
+    <line x1="260" y1="56" x2="260" y2="590"/>
+    <line x1="430" y1="56" x2="430" y2="590"/>
+    <line x1="605" y1="56" x2="605" y2="590"/>
+    <line x1="785" y1="56" x2="785" y2="590"/>
+    <line x1="965" y1="56" x2="965" y2="590"/>
+  </g>
+
+  <!-- A. sync download path -->
+  <text x="30" y="86" font-size="12.5" font-weight="700" fill="#0f172a">A. Sync download path (HTTP + ID)</text>
+
+  <line x1="90" y1="110" x2="255" y2="110" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="172" y="104" text-anchor="middle" font-size="11.5" fill="#1e40af">GET /files/{id}/download  (trace-id)</text>
+
+  <line x1="260" y1="145" x2="425" y2="145" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="342" y="139" text-anchor="middle" font-size="11.5" fill="#1e40af">verify token</text>
+  <line x1="425" y1="165" x2="265" y2="165" stroke="#16a34a" stroke-width="1.3" marker-end="url(#arrG)"/>
+  <text x="345" y="180" text-anchor="middle" font-size="11" fill="#15803d">200 ok</text>
+
+  <line x1="260" y1="205" x2="600" y2="205" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="430" y="199" text-anchor="middle" font-size="11.5" fill="#1e40af">get file {id} metadata</text>
+  <line x1="600" y1="225" x2="265" y2="225" stroke="#16a34a" stroke-width="1.3" marker-end="url(#arrG)"/>
+  <text x="432" y="240" text-anchor="middle" font-size="11" fill="#15803d">owner · size · block list</text>
+
+  <line x1="260" y1="265" x2="780" y2="265" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="520" y="259" text-anchor="middle" font-size="11.5" fill="#1e40af">fetch blocks by block ids</text>
+  <line x1="780" y1="285" x2="265" y2="285" stroke="#16a34a" stroke-width="1.3" marker-end="url(#arrG)"/>
+  <text x="522" y="300" text-anchor="middle" font-size="11" fill="#15803d">stream bytes</text>
+
+  <line x1="260" y1="325" x2="95" y2="325" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrG)"/>
+  <text x="175" y="319" text-anchor="middle" font-size="11.5" fill="#15803d">200 stream file</text>
+
+  <!-- B. async path -->
+  <text x="30" y="370" font-size="12.5" font-weight="700" fill="#0f172a">B. Async path (event bus, fire and forget)</text>
+
+  <line x1="605" y1="400" x2="960" y2="400" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrV)"/>
+  <text x="782" y="394" text-anchor="middle" font-size="11.5" fill="#6d28d9">FileAccessed event {file_id, user_id}</text>
+
+  <line x1="960" y1="430" x2="785" y2="430" stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#arrV)"/>
+  <text x="872" y="446" text-anchor="middle" font-size="11" fill="#7c3aed">audit logger (async)</text>
+
+  <line x1="960" y1="470" x2="605" y2="470" stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#arrV)"/>
+  <text x="782" y="486" text-anchor="middle" font-size="11" fill="#7c3aed">search indexer updates recency</text>
+
+  <line x1="960" y1="510" x2="430" y2="510" stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="6 4" marker-end="url(#arrV)"/>
+  <text x="695" y="526" text-anchor="middle" font-size="11" fill="#7c3aed">quota service increments read counter</text>
+
+  <text x="540" y="570" text-anchor="middle" font-size="11.5" fill="#64748b">Sync path chained by IDs (no joins, no shared tables). Async path decoupled via MQ, consumers idempotent.</text>
+</svg>
+</body>
+</html>
