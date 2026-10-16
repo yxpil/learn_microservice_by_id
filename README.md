@@ -1,67 +1,109 @@
 # Learn Microservices — One DB Per Service, Bound by Unique ID
 
-> **Learning / study repo. This is a self-contained demo / simulation, NOT production code.**
-> It exists only to learn the core microservice data rule: **each service owns exactly one
-> database, databases never share tables or foreign keys, and services are chained together
-> only by unique business IDs** (user_id, product_id, order_id).
+> **Learning / study repo. Self-contained demo / simulation, NOT production code.**
+> It exists to learn the core microservice data rule: **each service owns exactly one
+> database, databases never share tables or foreign keys, services are chained only by
+> unique business IDs** (user_id, product_id, order_id).
 
-## The idea
+## Cloud-drive architecture in one picture
 
-![Architecture](docs/architecture.png)
+![Cloud drive architecture](docs/cloud_arch.png)
 
 ```
-  gateway (orchestration)
-      │  HTTP + ID
-      ├─► user service    →  user.json     (only users)
-      ├─► product service  →  product.json  (only products)
-      ├─► order service    →  order.json    (only orders; stores user_id, product_id)
-      └─► payment service  →  payment.json  (only payments; stores order_id)
+  Clients ─► API Gateway / Glue ─► user · file-metadata · block-storage · share · search · preview
+                                   each service owns its own DB, chained by ID
+                                   services ──(async events)──► Event Bus ─► audit / search-index / quota
 ```
 
-- One service = one process = one database. No service writes another service's tables.
-- Cross-service "joins" are done at request time: order service calls user service by
-  `user_id` and product service by `product_id` to assemble a human-readable detail.
-- No distributed transaction coordinator. The gateway chains calls; on failure it does a
-  best-effort local compensation (e.g. refund balance when stock is unavailable).
+## Why cloud drives are built this way
 
-## Services
+A cloud drive is not one system — it is capabilities with totally different rhythms:
+account/login (strong, low-frequency), file metadata (extreme read concurrency), block
+storage (massive small IO), search (inverted index), preview (CPU-heavy transcode),
+share (revocable links), quota/billing (reconciliation). Different concurrency models,
+data volumes, tech stacks, release cadences. Squeezing them into one DB means file
+listing drags down login, and changing share logic regresses everything.
 
-| Service | Port | DB file | Owns | References (ID only, no copies) |
-|---|---|---|---|---|
-| user | 7001 | `user.json` | users (name, balance) | — |
-| product | 7002 | `product.json` | products (name, price, stock) | — |
-| order | 7003 | `order.json` | orders (qty, amount, status) | `user_id`, `product_id` |
-| payment | 7004 | `payment.json` | payments (amount, status) | `order_id`, `user_id` |
+**One service one DB buys:** independent scaling, independent tech choice, failure
+isolation, clean data boundary (no `join files inside users`).
 
-## Run
+**Why chain by ID, not shared tables / foreign keys:** shared DB = coupled releases;
+foreign keys don't exist across services. An ID is the cheapest contract — order stores
+`user_id`, calls user service over HTTP when it needs user info, or subscribes to events
+and keeps a read-only copy. **Adding a feature never changes the old DB schema.**
+
+## What "glue" buys you
+
+Don't build one big system. Build tiny single-responsibility components that don't know
+each other, and an orchestration layer sticks them into complex behaviors.
+
+- **Components are trivial** — file service just serves bytes by `file_id`; it doesn't
+  know about watermarks, AV scan, or AI summaries.
+- **Business changes concentrate in the glue** — "download must run virus scan first"
+  changes the flow, not the parts.
+- **Replaceable / pluggable** — swap object storage, swap transcode engine, as long as
+  the ID contract holds. Strangler-fig migration of old systems.
+- **Combinatorial reuse** — the same "get file" component is reused by download, preview,
+  search indexing, AV scan, AI summary, share links.
+- **Fault tolerance in one place** — glue retries / degrades / caches; components stay simple.
+
+## Download flow (sequence)
+
+![Download sequence](docs/cloud_seq.png)
+
+- **Sync path** (HTTP + ID): client → gateway → auth → file-metadata → block-storage →
+  stream bytes back. No joins, no shared tables; every hop carries a trace-id.
+- **Async path** (event bus): file-metadata emits `FileAccessed`; audit logger, search
+  indexer, quota service subscribe independently. Consumers must be idempotent.
+
+## Downsides and how to avoid them
+
+| Downside | Avoid |
+|---|---|
+| No cross-service local txn; lost/duplicate events | Idempotency keys; at-least-once + idempotent consumers; eventual consistency + compensation |
+| Glue grows into a distributed monolith | Explicit state machine / workflow; glue only decides call order & failure; merge services when flows outgrow N steps |
+| Debugging across 6 services is a black box | Mandatory trace-id; central logs/metrics; every service exposes /health |
+| Redundant copies drift out of sync | Copies are read-only caches; source of truth stays original service; offline reconciliation |
+| RPC latency kills P99 | Parallel calls, batch endpoints, pre-aggregated read models, local cache |
+| N× ops cost | Containerize with one template; merge tiny services; shared CI/CD platform |
+| Interface changes break all consumers | Backward-compatible additions, versioned breaks, contract tests |
+| Glue layer is a single point | Stateless + replicated; edge degradation |
+| Premature decomposition | Start monolith; split only when real pain hits (coupled releases, independent scaling need) |
+
+**Three rules to survive:** idempotency everywhere, trace-id end to end, don't split until it hurts.
+
+---
+
+## This demo
+
+Four independent processes, each owning one JSON DB, chained by ID:
+
+| Service | Port | Owns | References (ID only) |
+|---|---|---|---|
+| user | 7001 | users (name, balance) | — |
+| product | 7002 | products (name, price, stock) | — |
+| order | 7003 | orders (qty, amount, status) | `user_id`, `product_id` |
+| payment | 7004 | payments (amount, status) | `order_id`, `user_id` |
+
+### Run
 
 ```bash
 python run_all.py
 ```
 
-Pure Python standard library, no dependencies. It spawns the 4 processes, seeds one user
-and one product, runs the demo cases, then shuts everything down.
+Pure Python standard library. It spawns the 4 processes, seeds one user + product, runs
+the demo cases, then shuts down.
 
-## Demo cases
+### Demo cases
 
-1. **Normal order** — gateway creates order, deducts balance, deducts stock, records payment,
-   marks order PAID. Order detail is assembled by calling user + product services by ID.
-2. **Insufficient balance** — order fails at the balance step; stock is never touched.
-3. **Out of stock** — balance was deducted, then stock failed; gateway refunds the balance
-   as compensation.
-4. **Order join by ID** — raw order row contains only IDs (no names); the detail endpoint
-   joins across services by ID on the fly.
+1. **Normal order** — create order → deduct balance → deduct stock → record payment →
+   mark PAID; detail assembled by calling user + product services by ID.
+2. **Insufficient balance** — fails at balance step; stock untouched.
+3. **Out of stock** — balance deducted, stock fails; gateway refunds balance as compensation.
+4. **Order join by ID** — raw order row has only IDs; detail joins across services on the fly.
 
-## What this demonstrates (and what it doesn't)
+## Relation to `learn_distributed_txn`
 
-**Demonstrates:**
-- Database-per-service as a hard boundary.
-- Services chained by unique IDs, not by shared tables.
-- Request-time "joins" via HTTP calls.
-- Best-effort compensation when a downstream step fails.
-
-**Does NOT solve (that's the sibling project `learn_distributed_txn`):**
-- Strong cross-service consistency / distributed transactions.
-- Idempotency keys, retries, dead-letter queues, node self-healing.
-- This demo intentionally keeps the happy path and one compensation branch; production
-  microservices need the whole saga/state-machine machinery from the other repo.
+This repo covers the **data boundary** side (one DB per service, chained by ID). The
+sibling repo `learn_distributed_txn` covers the **consistency** side (pre-freeze + state
+machine + two-layer self-healing) that production microservices need once failures happen.
